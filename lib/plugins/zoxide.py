@@ -13,6 +13,7 @@ def _copy(plugin: Plugin, src: Path, dst: Path, format_kwargs: FormatKwargs):
     # src = src / f"{format_kwargs['filename'].rstrip('.tar.gz')}/"
     if not src.exists():
         raise Exception(f"Source path {src} does not exist")
+    dst = dst / "bin"
     shutil.copytree(src, dst, dirs_exist_ok=True)
     cmd = dst / plugin.cmd
     cmd.chmod(0o755)
