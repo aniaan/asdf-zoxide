@@ -15,7 +15,6 @@ from typing import Any, Callable, Literal, TypedDict, Union
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-
 PlatformType = Literal["darwin", "linux"]
 ArchType = Literal["x86_64", "aarch64"]
 
@@ -34,10 +33,25 @@ class FormatKwargs(TypedDict):
 LibTemplate = Union[str, Callable[[FormatKwargs], str]]
 
 
-def verify_by_sha256sum(file_path: Path, checksum_path: Path):
+def verify_by_sha256sum(file_path: Path, expected: str):
     print(f"Verifying checksum for {file_path.name}...")
     if not shutil.which("shasum") and not shutil.which("sha256sum"):
         raise Exception("shasum or sha256sum not found")
+
+    cmd = ["shasum", "-a", "256"] if shutil.which("shasum") else ["sha256sum"]
+    result = subprocess.run([*cmd, file_path], capture_output=True, text=True)
+    actual = result.stdout.split()[0]
+
+    if actual != expected:
+        raise Exception(
+            f"Checksum verification failed: {actual} != {expected} for {file_path.name}"
+        )
+    print("Checksum verification passed")
+
+    pass
+
+
+def verify_by_sha256sum_with_checksum_path(file_path: Path, checksum_path: Path):
     with open(checksum_path) as f:
         expected = None
         lines = f.readlines()
@@ -50,15 +64,7 @@ def verify_by_sha256sum(file_path: Path, checksum_path: Path):
         if not expected:
             raise Exception(f"Checksum not found for {file_path.name}")
 
-    cmd = ["shasum", "-a", "256"] if shutil.which("shasum") else ["sha256sum"]
-    result = subprocess.run([*cmd, file_path], capture_output=True, text=True)
-    actual = result.stdout.split()[0]
-
-    if actual != expected:
-        raise Exception(
-            f"Checksum verification failed: {actual} != {expected} for {file_path.name}"
-        )
-    print("Checksum verification passed")
+    verify_by_sha256sum(file_path=file_path, expected=expected)
 
 
 def _verify_by_minisign(
@@ -135,10 +141,13 @@ def get_plugin(plugin_name: str) -> Plugin:
 
 
 API_RELEASE_URL = "https://api.github.com/repos/{repo_name}/releases"
+API_TAG_INFO_URL = API_RELEASE_URL + "/tags/{version}"
 GITHUB_URL = "https://github.com/{repo_name}"
 DOWNLOAD_BASE_URL = GITHUB_URL + "/releases/download/{version}"
 BINARY_URL = DOWNLOAD_BASE_URL + "/{filename}"
 CHECKSUM_URL = DOWNLOAD_BASE_URL + "/{checksum_filename}"
+
+GITHUB_CHECKER_FLAG = "github-api"
 
 
 def list_repo_url(plugin_name: str) -> str:
@@ -156,7 +165,7 @@ def list_version(plugin_name: str, with_published_at: bool = False) -> str:
 
         sorted_releases = sorted(
             filter(plugin.release_filter, releases),
-            key = plugin.sort_version_key,
+            key=plugin.sort_version_key,
             reverse=True,
         )
 
@@ -244,6 +253,34 @@ def _download_file(url: str, download_path: Path):
         download_path.write_bytes(response.read())
 
 
+def _get_github_api_checker(file_path: Path, format_kwargs: FormatKwargs):
+    print(f"_get_github_api_checker: file_path: {file_path}")
+    tag_url = API_TAG_INFO_URL.format(**format_kwargs)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    req = Request(url=tag_url, headers=headers)
+
+    with urlopen(req) as response:
+        if response.status != 200:
+            raise Exception(f"{tag_url} status: {response.status}")
+
+        data = json.loads(response.read())
+        filename = file_path.name
+        api_sha256sum = None
+
+        for item in data["assets"]:
+            if item["name"] == filename:
+                api_sha256sum = item["digest"].split("sha256:")[-1]
+                break
+
+        if not api_sha256sum:
+            raise Exception(f"{tag_url} digest is null")
+
+        verify_by_sha256sum(file_path=file_path, expected=api_sha256sum)
+
+
 def _get_checker(
     plugin: Plugin,
     download_dir: Path,
@@ -252,6 +289,11 @@ def _get_checker(
 ) -> Callable[[Path], None]:
     if not checksum_filename:
         return lambda _: None
+
+    if checksum_filename == GITHUB_CHECKER_FLAG:
+        return lambda file_path: _get_github_api_checker(
+            file_path=file_path, format_kwargs=format_kwargs
+        )
 
     checksum_url = (
         checksum_filename
@@ -268,7 +310,9 @@ def _get_checker(
             file_path, checksum_path, format_kwargs
         )  # type: ignore
     else:
-        checker = lambda file_path: verify_by_sha256sum(file_path, checksum_path)
+        checker = lambda file_path: verify_by_sha256sum_with_checksum_path(
+            file_path, checksum_path
+        )
 
     return checker
 
