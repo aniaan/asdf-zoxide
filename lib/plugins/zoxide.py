@@ -10,7 +10,7 @@ from lib.lib import FormatKwargs, Plugin
 
 
 def _copy(plugin: Plugin, src: Path, dst: Path, format_kwargs: FormatKwargs):
-    # src = src / f"{format_kwargs['filename'].rstrip('.tar.gz')}/"
+    # src = src / f"{format_kwargs['filename'].removesuffix('.tar.gz')}/"
     if not src.exists():
         raise Exception(f"Source path {src} does not exist")
     dst = dst / "bin"
@@ -24,7 +24,7 @@ PLUGIN = Plugin(
     cmd="zoxide",
     repo_name="ajeetdsouza/zoxide",
     filename_template="zoxide-{normalize_version}-{arch}-{platform}.tar.gz",
-    bin_path=lambda kwargs: f"{kwargs['filename'].rstrip('.tar.gz')}/zoxide",
+    bin_path=lambda kwargs: f"{kwargs['filename'].removesuffix('.tar.gz')}/zoxide",
     platform_map={
         "darwin": "apple-darwin",
         "linux": "unknown-linux-musl",
